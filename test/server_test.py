@@ -47,11 +47,26 @@ except ImportError:
 devices = {}  # dev_id -> 最新状态
 
 # ========== 命令模板 ==========
+# JSON 格式（兼容，后备）
 CMD_TEMPLATES = {
-    'clean': '{"cmd":1,"dev":{dev},"act":1}',
-    'reset': '{"cmd":1,"dev":{dev},"act":2}',
-    'stop':  '{"cmd":1,"dev":{dev},"act":0}',
+    'clean': '{"t":"set_panel","id":{dev},"mode":1}',
+    'reset': '{"t":"set_panel","id":{dev},"mode":2}',
+    'stop':  '{"t":"set_panel","id":{dev},"mode":0}',
 }
+
+# 二进制格式（默认，5字节低延迟）: [0xAB] [dev_id] [mode] [0xCD] [checksum]
+def bin_cmd(dev, mode):
+    """构建 5 字节二进制快速指令"""
+    ck = (dev ^ mode ^ 0xCD) & 0xFF
+    return bytes([0xAB, dev, mode, 0xCD, ck])
+
+BIN_CMDS = {
+    'clean': lambda d: bin_cmd(d, 1),
+    'reset': lambda d: bin_cmd(d, 2),
+    'stop':  lambda d: bin_cmd(d, 0),
+}
+
+USE_BINARY = True  # True=二进制快速指令(默认), False=JSON
 
 # ========== 帮助信息 ==========
 def print_help():
@@ -63,6 +78,7 @@ def print_help():
   {Color.GREEN}status{Color.RESET}          — 显示所有设备最新状态
   {Color.GREEN}list{Color.RESET}            — 列出已连接的设备
   {Color.GREEN}clear{Color.RESET}           — 清屏
+  {Color.GREEN}bin{Color.RESET}             — 切换二进制/JSON 发送模式（当前: {"BIN" if USE_BINARY else "JSON"}）
   {Color.GREEN}help{Color.RESET}            — 显示本帮助
   {Color.GREEN}quit / exit{Color.RESET}     — 退出服务端
 
@@ -162,7 +178,10 @@ class TCPServer:
 
     def send_to_client(self, client_sock, data):
         try:
-            client_sock.sendall((data + '\n').encode('utf-8'))
+            if isinstance(data, bytes):
+                client_sock.sendall(data)
+            else:
+                client_sock.sendall((data + '\n').encode('utf-8'))
             return True
         except Exception as e:
             print(f"{Color.RED}[发送失败]{Color.RESET} {e}")
@@ -174,8 +193,7 @@ class TCPServer:
                 self._remove_client(fd)
 
     def send_to_device(self, dev_id, data):
-        """根据设备 ID 发送（如果知道是哪个连接）"""
-        # 广播给所有连接（ESP 会根据 deviceID 自行过滤）
+        """向指定设备发送指令（广播，ESP 按 deviceID 自行过滤）"""
         self.send_to_all(data)
 
     def _remove_client(self, fd):
@@ -247,12 +265,15 @@ class UDPServer:
         print(f"{Color.YELLOW}[UDP 服务端已关闭]{Color.RESET}")
 
     def send_to_all(self, data):
-        """UDP 广播给最近通信的客户端"""
+        """向最近通信的客户端发送数据"""
         if not self.last_client:
             print(f"{Color.YELLOW}[UDP] 无目标客户端（尚未收到任何设备数据）{Color.RESET}")
             return
         try:
-            self.sock.sendto((data + '\n').encode('utf-8'), self.last_client)
+            if isinstance(data, bytes):
+                self.sock.sendto(data, self.last_client)
+            else:
+                self.sock.sendto((data + '\n').encode('utf-8'), self.last_client)
         except Exception as e:
             print(f"{Color.RED}[UDP 发送失败]{Color.RESET} {e}")
 
@@ -292,9 +313,13 @@ def handle_shortcut(cmd, server):
         return False
 
     act_name, act_cn = action_map[cmd[1]]
-    data = CMD_TEMPLATES[act_name].format(dev=dev)
+    if USE_BINARY:
+        data = BIN_CMDS[act_name](dev)
+        print(f"  发送BIN → {act_cn}命令 to 设备#{dev}  {data.hex()}")
+    else:
+        data = CMD_TEMPLATES[act_name].format(dev=dev)
+        print(f"  发送 → {act_cn}命令 to 设备#{dev}  {data}")
     server.send_to_device(dev, data)
-    print(f"  发送 → {act_cn}命令 to 设备#{dev}  {data}")
     return True
 
 # ========== 用户输入处理 ==========
@@ -337,6 +362,12 @@ def process_user_command(cmd, server):
     elif action == 'list':
         print_list()
 
+    elif action == 'bin':
+        global USE_BINARY
+        USE_BINARY = not USE_BINARY
+        mode = "BIN(5字节)" if USE_BINARY else "JSON"
+        print(f"  发送模式切换为: {Color.BOLD}{mode}{Color.RESET}")
+
     elif action == 'clear':
         print('\n' * 50)
 
@@ -352,10 +383,14 @@ def process_user_command(cmd, server):
         except ValueError:
             print(f"  {Color.RED}设备号需为 1~4{Color.RESET}")
             return
-        data = CMD_TEMPLATES[action].format(dev=dev)
-        server.send_to_device(dev, data)
         act_names = {'clean': '除尘', 'reset': '复位', 'stop': '停止'}
-        print(f"  发送 → {act_names[action]}命令 to 设备#{dev}  {data}")
+        if USE_BINARY:
+            data = BIN_CMDS[action](dev)
+            print(f"  发送BIN → {act_names[action]}命令 to 设备#{dev}  {data.hex()}")
+        else:
+            data = CMD_TEMPLATES[action].format(dev=dev)
+            print(f"  发送 → {act_names[action]}命令 to 设备#{dev}  {data}")
+        server.send_to_device(dev, data)
 
     else:
         print(f"  {Color.RED}未知命令: {cmd}{Color.RESET}")

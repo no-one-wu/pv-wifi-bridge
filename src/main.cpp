@@ -18,6 +18,7 @@ uint32_t lastStatusSent = 0;          // 上次向服务器上报状态时刻
 
 bool    pendingCommand = false;       // 是否有待发给 MCU 的命令
 uint8_t pendingAction  = 0;           // 待发动作: ACT_CLEAN=1 / ACT_RESET=2
+int8_t  lastStepperMode = -1;         // 上一次的电机模式，检测变化立即上报
 
 // ================================================================
 //  setStatusLED — WiFi 状态指示灯
@@ -355,7 +356,22 @@ void processIncomingMCUData() {
                         parseMCUPanelJSON((const char*)outPayload, sensorData, cfg.deviceID);
                         break;
                     case WIFI_TYPE_ACK:
-                        Serial.printf("[ACK] %s\n", outPayload);
+                        // ACK 包含命令执行结果: {"t":"ack","cmd":"set_panel","id":2,"mode":1,"ok":1}
+                        // 从 ACK 推断当前电机模式，不依赖 MCU 面板状态上报
+                        {
+                            const char *m = strstr((const char*)outPayload, "\"mode\":");
+                            const char *o = strstr((const char*)outPayload, "\"ok\":");
+                            if (m && o) {
+                                int mode = atoi(m + 7);
+                                int ok = atoi(o + 5);
+                                if (ok && mode >= 1 && mode <= 2) {
+                                    sensorData.stepperMode = (int8_t)mode;
+                                    sensorData.lastUpdate = millis();
+                                    sensorData.online = true;
+                                    Serial.printf("[ACK] mode=%d ok=%d -> stepperMode updated\n", mode, ok);
+                                }
+                            }
+                        }
                         break;
                     case WIFI_TYPE_FAULT:
                         Serial.printf("[FAULT] %s\n", outPayload);
@@ -394,17 +410,24 @@ void processOutgoingCommands() {
 }
 
 // ================================================================
-//  periodicStatusReport — 定时向服务器上报设备状态 JSON
+//  periodicStatusReport — 向服务器上报设备状态
 // ================================================================
+// 两种触发:
+//   1. 电机模式发生变化 → 立即上报
+//   2. 每 STATUS_SEND_INTERVAL 定时心跳
 void periodicStatusReport() {
-    if (millis() - lastStatusSent < STATUS_SEND_INTERVAL) return;
-    lastStatusSent = millis();
+    bool modeChanged = (sensorData.stepperMode != lastStepperMode);
+    bool heartbeatDue = (millis() - lastStatusSent >= STATUS_SEND_INTERVAL);
+
+    if (!modeChanged && !heartbeatDue) return;
     if (!WiFi.isConnected()) return;
 
     char json[256];
     buildStatusJSON(json, sizeof(json));
 
     if (sendToServer(json)) {
+        lastStepperMode = sensorData.stepperMode;
+        lastStatusSent = millis();
 #ifdef DEBUG_PRINT
         Serial.printf("[SEND] %s\n", json);
 #endif

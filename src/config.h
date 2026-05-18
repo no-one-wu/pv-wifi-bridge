@@ -66,9 +66,9 @@ struct DeviceConfig {
 
 // 默认配置，固件烧录后首次使用，可通过串口 SET 命令运行时修改
 const DeviceConfig DEFAULT_CONFIG = {
-    "1",                       // ssid    iQOO Neo9 Pro
+    "401-iot",                       // ssid    iQOO Neo9 Pro
     "12345678",                           // password
-    IPAddress(192,168,0,200),              // serverIP   192, 168, 157, 179
+    IPAddress(192,168,1,118),              // serverIP   192, 168, 157, 179
     9000,                                  // serverPort
     false,                                 // useUDP
     2                                      // deviceID（1-4）

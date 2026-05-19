@@ -7,23 +7,22 @@
 // ================================================================
 //  全局变量
 // ================================================================
-DeviceConfig  cfg = DEFAULT_CONFIG;   // 设备配置
-SensorData    sensorData;             // MCU 状态
-CommStats     stats;                  // 通信统计
-WiFiClient    tcpClient;              // TCP 客户端
-WiFiUDP       udpClient;              // UDP 客户端
+DeviceConfig  cfg = DEFAULT_CONFIG;
+SensorData    sensorData;
+CommStats     stats;
+WiFiClient    tcpClient;
+WiFiUDP       udpClient;
 
-uint32_t lastWiFiCheck  = 0;          // 上次 WiFi 检查时刻
-uint32_t lastHeartbeat   = 0;          // 上次心跳发送时刻
+uint32_t lastWiFiCheck  = 0;
+uint32_t lastHeartbeat  = 0;
 
-bool    pendingCommand = false;       // 是否有待发给 MCU 的命令
-uint8_t pendingAction  = 0;           // 待发动作: ACT_CLEAN=1 / ACT_RESET=2
-int8_t  lastStepperMode = -1;         // 上一次的电机模式，检测变化立即上报
+bool    pendingCommand = false;
+uint8_t pendingAction  = 0;
+int8_t  lastStepperMode = -1;
 
 // ================================================================
 //  setStatusLED — WiFi 状态指示灯
 // ================================================================
-// connected=true → GPIO4 低电平 → 灯亮
 void setStatusLED(bool connected) {
     digitalWrite(STATUS_LED_PIN, connected ? LOW : HIGH);
 }
@@ -31,7 +30,6 @@ void setStatusLED(bool connected) {
 // ================================================================
 //  buildStatusJSON — 构造上报服务器的设备状态 JSON
 // ================================================================
-// 格式: {"dev":1,"mode":0,"rssi":-55,"ts":123456}
 void buildStatusJSON(char *buf, size_t len) {
     snprintf(buf, len,
         "{\"dev\":%u,\"mode\":%d,\"rssi\":%d,\"ts\":%lu}",
@@ -40,12 +38,8 @@ void buildStatusJSON(char *buf, size_t len) {
 }
 
 // ================================================================
-//  parseServerCommand — 解析服务器 JSON 指令
+//  parseServerCommand — 解析服务器 JSON 指令（不变）
 // ================================================================
-// 支持格式:
-//   {"t":"set_panel","id":1,"mode":1}  (推荐) mode: 1=清洁 2=复位
-//   {"cmd":1,"dev":2,"act":1}          (兼容) act:  1=清洁 2=复位
-// 匹配本地 deviceID 后设置 pendingCommand，在 loop 中转发给 MCU
 void parseServerCommand(const char *json) {
     uint8_t dev = 0;
     uint8_t act = 0;
@@ -76,16 +70,11 @@ void parseServerCommand(const char *json) {
 }
 
 // ================================================================
-//  parseBinaryCommand — 解析服务器发来的 5 字节二进制快速指令
+//  parseBinaryCommand — 解析服务器 5 字节二进制快速指令（不变）
 // ================================================================
-// 格式: [0xAB] [dev_id] [mode] [0xCD] [checksum]
-// 比 JSON 少 32 字节传输量，省去字符串解析，适合低延迟控制
 static void parseBinaryCommand(const uint8_t *data, uint16_t len) {
     if (len < BIN_CMD_LEN) return;
-    if (data[0] != BIN_CMD_SYNC || data[3] != BIN_CMD_TAIL) {
-        Serial.printf("[CMD:BIN] bad header: %02X %02X\n", data[0], data[3]);
-        return;
-    }
+    if (data[0] != BIN_CMD_SYNC || data[3] != BIN_CMD_TAIL) return;
 
     uint8_t dev  = data[1];
     uint8_t mode = data[2];
@@ -95,27 +84,17 @@ static void parseBinaryCommand(const uint8_t *data, uint16_t len) {
         return;
     }
 
-    if (dev < 1 || dev > 4 || dev != cfg.deviceID) {
-        Serial.printf("[CMD:BIN] dev=%u ignored (local=%u)\n", dev, cfg.deviceID);
-        return;
-    }
+    if (dev < 1 || dev > 4 || dev != cfg.deviceID) return;
     if (mode != ACT_CLEAN && mode != ACT_RESET) return;
 
     pendingAction = mode;
     pendingCommand = true;
-    Serial.printf("[CMD:BIN] dev=%u act=%u -> pending\n", dev, mode);
+    Serial.printf("[CMD:BIN] dev=%u act=%u\n", dev, mode);
 }
 
 // ================================================================
-//  processSerialCommand — 串口文本配置命令
+//  processSerialCommand — 串口文本配置命令（不变）
 // ================================================================
-// 支持的命令（大小写敏感）:
-//   SET SSID <名称>             修改 WiFi
-//   SET PASS <密码>             修改密码
-//   SET SERVER <IP>:<端口>      修改服务器地址
-//   SET MODE TCP|UDP            切换传输协议
-//   SET DEV <1-4>               修改本机设备号
-//   STATUS                      查看运行状态
 void processSerialCommand(const String &cmd) {
     String line = cmd;
     line.trim();
@@ -172,9 +151,8 @@ void processSerialCommand(const String &cmd) {
 }
 
 // ================================================================
-//  readSerialCommands — 串口文本行缓冲读取
+//  readSerialCommands — 串口文本行缓冲读取（不变）
 // ================================================================
-// 逐字符读取，遇到换行把整行交给 processSerialCommand
 void readSerialCommands() {
     static String cmdBuf = "";
     while (Serial.available()) {
@@ -188,7 +166,7 @@ void readSerialCommands() {
 }
 
 // ================================================================
-//  connectWiFi / checkWiFi — WiFi 连接管理
+//  connectWiFi / checkWiFi — WiFi 连接管理（不变）
 // ================================================================
 void connectWiFi() {
     if (WiFi.isConnected()) return;
@@ -201,7 +179,6 @@ void checkWiFi() {
     if (millis() - lastWiFiCheck < WIFI_CHECK_INTERVAL) return;
     lastWiFiCheck = millis();
 
-    // 双重检测: isConnected() 或已获取 IP 都视为在线
     bool hasIP = WiFi.localIP().isSet();
     if (WiFi.isConnected() || hasIP) {
         static bool wasConnected = false;
@@ -222,7 +199,6 @@ void checkWiFi() {
     };
     const char* name = (status <= WL_DISCONNECTED) ? names[status] : "UNKNOWN";
 
-    // 异常情况: 路由器显示有 IP 但 SDK 说未连接
     if (hasIP) {
         Serial.printf("[WIFI] BUG? has IP=%s but status=%s\n",
             WiFi.localIP().toString().c_str(), name);
@@ -241,7 +217,7 @@ void checkWiFi() {
 }
 
 // ================================================================
-//  ensureServerConnected / sendToServer / receiveFromServer — 网络通信
+//  ensureServerConnected / sendToServer / receiveFromServer（不变）
 // ================================================================
 bool ensureServerConnected() {
     if (cfg.useUDP) return true;
@@ -263,8 +239,8 @@ bool sendToServer(const char *data) {
     } else {
         if (ensureServerConnected()) {
             size_t sent = tcpClient.write((const uint8_t*)data, len);
-            tcpClient.flush();                            // 强制推数据
-            ok = (sent == len) && tcpClient.connected();  // write成功且连接仍在
+            tcpClient.flush();
+            ok = (sent == len) && tcpClient.connected();
             if (!ok) {
                 Serial.printf("[SEND] TCP fail, reconnecting...\n");
                 tcpClient.stop();
@@ -284,7 +260,6 @@ void receiveFromServer() {
             if (n > 0) {
                 stats.serverRecv++;
                 buf[n] = 0;
-                // 二进制快速通道: 首字节 0xAB → 5 字节指令
                 if (n >= BIN_CMD_LEN && buf[0] == BIN_CMD_SYNC) {
 #ifdef DEBUG_PRINT
                     Serial.printf("[DOWN:BIN] %u bytes\n", n);
@@ -299,14 +274,12 @@ void receiveFromServer() {
             }
         }
     } else {
-        // TCP 模式: 先确认有足够数据再读，避免 peek 后 read 阻塞
         int avail = tcpClient.available();
         if (tcpClient.connected() && avail > 0) {
             int first = tcpClient.peek();
             if (first < 0) return;
 
             if ((uint8_t)first == BIN_CMD_SYNC && avail >= BIN_CMD_LEN) {
-                // 二进制快速通道: 确认 5 字节都到了再一次性读走
                 uint8_t bin[5];
                 size_t n = tcpClient.read(bin, BIN_CMD_LEN);
                 if (n >= BIN_CMD_LEN) {
@@ -315,7 +288,6 @@ void receiveFromServer() {
                     parseBinaryCommand(bin, n);
                 }
             } else if ((uint8_t)first != BIN_CMD_SYNC) {
-                // JSON 通道
                 String line = tcpClient.readStringUntil('\n');
                 if (line.length() > 0) {
                     stats.serverRecv++;
@@ -323,7 +295,6 @@ void receiveFromServer() {
                     parseServerCommand(line.c_str());
                 }
             }
-            // first==0xAB 但 avail<5: 等下一轮 loop 数据到齐
         }
     }
 }
@@ -331,13 +302,6 @@ void receiveFromServer() {
 // ================================================================
 //  processIncomingMCUData — 从串口读取 MCU 发来的二进制帧
 // ================================================================
-// peek 首字节判断:
-//   0xAA → 二进制帧 (0xAA + type + len + JSON + checksum)，喂入状态机
-//   其他  → 文本行，由 readSerialCommands 处理
-// 收到完整帧后按类型分发:
-//   type 0x11 (PANEL_STATUS): 调用 parseMCUPanelJSON 更新电机状态
-//   type 0x14 (ACK):          打印应答确认
-//   type 0x12 (FAULT):        打印故障信息
 void processIncomingMCUData() {
     if (Serial.available() == 0) return;
 
@@ -352,34 +316,36 @@ void processIncomingMCUData() {
 
             if (parseMCUBinaryFrame(b, &outType, outPayload, &outLen)) {
                 stats.framesRecv++;
-                outPayload[outLen] = '\0';   // null-terminate JSON
 
                 switch (outType) {
                     case WIFI_TYPE_PANEL_STATUS:
-                        // MCU 面板状态: {"t":"panels","p":[...]}
-                        parseMCUPanelJSON((const char*)outPayload, sensorData, cfg.deviceID);
+                        // 20B 二进制面板状态，4路面板按顺序排列
+                        parseMCUPanelBinary(outPayload, outLen, sensorData, cfg.deviceID);
+#ifdef DEBUG_PRINT
+                        Serial.printf("[MCU] PANEL dev=%u st=%d\n",
+                            cfg.deviceID, sensorData.stepperMode);
+#endif
                         break;
+
                     case WIFI_TYPE_ACK:
-                        // ACK 包含命令执行结果: {"t":"ack","cmd":"set_panel","id":2,"mode":1,"ok":1}
-                        // 从 ACK 推断当前电机模式，不依赖 MCU 面板状态上报
-                        {
-                            const char *m = strstr((const char*)outPayload, "\"mode\":");
-                            const char *o = strstr((const char*)outPayload, "\"ok\":");
-                            if (m && o) {
-                                int mode = atoi(m + 7);
-                                int ok = atoi(o + 5);
-                                if (ok && mode >= 1 && mode <= 2) {
-                                    sensorData.stepperMode = (int8_t)mode;
-                                    sensorData.lastUpdate = millis();
-                                    sensorData.online = true;
-                                    Serial.printf("[ACK] mode=%d ok=%d -> stepperMode updated\n", mode, ok);
-                                }
-                            }
-                        }
+                        // 4B ACK: cmd + id + mode + ok
+                        parseMCUAckBinary(outPayload, outLen, sensorData, cfg.deviceID);
+#ifdef DEBUG_PRINT
+                        Serial.printf("[MCU] ACK id=%u mode=%u ok=%u -> stepperMode=%d\n",
+                            outPayload[1], outPayload[2], outPayload[3], sensorData.stepperMode);
+#endif
                         break;
+
                     case WIFI_TYPE_FAULT:
-                        Serial.printf("[FAULT] %s\n", outPayload);
+                        Serial.printf("[MCU] FAULT code=%u\n", outLen > 0 ? outPayload[0] : 0);
                         break;
+
+                    case WIFI_TYPE_SELFTEST_R:
+                        Serial.printf("[MCU] SELFTEST_R ok=%u total=%u\n",
+                            outLen > 1 ? outPayload[0] : 0,
+                            outLen > 1 ? outPayload[1] : 0);
+                        break;
+
                     default:
                         Serial.printf("[MCU] type=0x%02X len=%u\n", outType, outLen);
                         break;
@@ -394,30 +360,25 @@ void processIncomingMCUData() {
 // ================================================================
 //  processOutgoingCommands — 将待发命令打包成二进制帧发给 MCU
 // ================================================================
-// 服务器 JSON 已解析为 pendingAction (1=清洁 2=复位)
-// 打包成 MCU 期望的格式: 二进制帧(0xAA+type=0x20+JSON负载)，直接发送
+// 构造纯二进制 payload: [panel_id 1B] [mode 1B]
 void processOutgoingCommands() {
     if (!pendingCommand) return;
 
-    // 构造 MCU 期望的 JSON: {"t":"set_panel","id":N,"mode":M}
-    char payload[64];
-    snprintf(payload, sizeof(payload),
-        "{\"t\":\"set_panel\",\"id\":%u,\"mode\":%u}",
-        cfg.deviceID, pendingAction);
+    uint8_t payload[2];
+    payload[0] = (uint8_t)cfg.deviceID;
+    payload[1] = pendingAction;   // ACT_CLEAN=1 / ACT_RESET=2
 
-    sendFrameToMCU(WIFI_TYPE_SET_PANEL, payload, strlen(payload));
+    sendFrameToMCU(WIFI_TYPE_SET_PANEL, payload, 2);
     stats.framesSent++;
 #ifdef DEBUG_PRINT
-    Serial.printf("[TXMCU] %s\n", payload);
+    Serial.printf("[TXMCU] SET_PANEL id=%u mode=%u\n", payload[0], payload[1]);
 #endif
     pendingCommand = false;
 }
 
 // ================================================================
-//  periodicStatusReport — 向服务器上报设备状态
+//  periodicStatusReport — 向服务器上报设备状态（不变）
 // ================================================================
-// 变化驱动：MCU 数据进来后 stepperMode 变了 → 立刻发
-// 心跳兜底：无变化时每 HEARTBEAT_INTERVAL(15s) 发一次证明在线
 void periodicStatusReport() {
     bool modeChanged = (sensorData.stepperMode != lastStepperMode);
     bool heartbeatDue = (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL);
@@ -437,12 +398,12 @@ void periodicStatusReport() {
 }
 
 // ================================================================
-//  handleWatchdog — 喂硬件看门狗
+//  handleWatchdog — 喂硬件看门狗（不变）
 // ================================================================
 void handleWatchdog() { ESP.wdtFeed(); }
 
 // ================================================================
-//  setup — 上电初始化
+//  setup / loop（不变）
 // ================================================================
 void setup() {
     pinMode(STATUS_LED_PIN, OUTPUT);
@@ -452,32 +413,20 @@ void setup() {
     while (!Serial) ;
     Serial.setTimeout(10);
 
-    Serial.println("\n[BOOT] ESP-12F PV WiFi Bridge v1.1");
+    Serial.println("\n[BOOT] ESP-12F PV WiFi Bridge v2.0");
     Serial.printf("[BOOT] dev=%u server=%s:%u %s\n",
         cfg.deviceID, cfg.serverIP.toString().c_str(),
         cfg.serverPort, cfg.useUDP ? "UDP" : "TCP");
 
     memset(&sensorData, 0, sizeof(sensorData));
-    sensorData.stepperMode = MODE_IDLE;
 
     connectWiFi();
-    // setStatusLED(true);
     if (!cfg.useUDP) tcpClient.setNoDelay(true);
 
     lastWiFiCheck  = millis();
     lastHeartbeat = millis();
 }
 
-// ================================================================
-//  loop — 主循环 (每轮 ~10ms)
-// ================================================================
-//  1. 喂狗
-//  2. 处理 MCU 串口数据（二进制帧优先，文本其次）
-//  3. WiFi 断线检查
-//  4. 接收服务器指令
-//  5. 转发命令给 MCU
-//  6. 定时上报状态
-//  7. MCU 超时检测
 void loop() {
     handleWatchdog();
 

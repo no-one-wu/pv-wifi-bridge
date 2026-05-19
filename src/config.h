@@ -5,12 +5,12 @@
 #include <ESP8266WiFi.h>
 
 // ========== 硬件引脚 ==========
-#define STATUS_LED_PIN   2       // GPIO4, 低电平点亮（WiFi已连）, 高电平灭。不用GPIO2因为它是启动引脚，电平不稳
+#define STATUS_LED_PIN   2       // GPIO4, 低电平点亮。不用GPIO2(启动引脚)
 #define SERIAL_BAUD      115200  // 串口波特率，与 MCU UART6 一致
 
 // ========== 时间参数（毫秒） ==========
 #define WIFI_CHECK_INTERVAL   5000   // WiFi 断线检查间隔：5秒
-#define STATUS_SEND_INTERVAL  2000   // 服务器状态上报间隔：2秒
+#define HEARTBEAT_INTERVAL    15000  // 无变化时心跳间隔：15秒（状态变化则立即上报）
 #define STATUS_TIMEOUT_MS     10000  // MCU 超时判定：10秒无数据视为离线
 
 // ========== MCU 二进制帧协议常量 ==========
@@ -71,7 +71,7 @@ const DeviceConfig DEFAULT_CONFIG = {
     IPAddress(192,168,1,118),              // serverIP   192, 168, 157, 179
     9000,                                  // serverPort
     false,                                 // useUDP
-    2                                      // deviceID（1-4）
+    1                                      // deviceID（1-4）
 };
 
 // ========== 设备状态 ==========

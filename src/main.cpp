@@ -14,7 +14,7 @@ WiFiClient    tcpClient;              // TCP 客户端
 WiFiUDP       udpClient;              // UDP 客户端
 
 uint32_t lastWiFiCheck  = 0;          // 上次 WiFi 检查时刻
-uint32_t lastStatusSent = 0;          // 上次向服务器上报状态时刻
+uint32_t lastHeartbeat   = 0;          // 上次心跳发送时刻
 
 bool    pendingCommand = false;       // 是否有待发给 MCU 的命令
 uint8_t pendingAction  = 0;           // 待发动作: ACT_CLEAN=1 / ACT_RESET=2
@@ -416,12 +416,11 @@ void processOutgoingCommands() {
 // ================================================================
 //  periodicStatusReport — 向服务器上报设备状态
 // ================================================================
-// 两种触发:
-//   1. 电机模式发生变化 → 立即上报
-//   2. 每 STATUS_SEND_INTERVAL 定时心跳
+// 变化驱动：MCU 数据进来后 stepperMode 变了 → 立刻发
+// 心跳兜底：无变化时每 HEARTBEAT_INTERVAL(15s) 发一次证明在线
 void periodicStatusReport() {
     bool modeChanged = (sensorData.stepperMode != lastStepperMode);
-    bool heartbeatDue = (millis() - lastStatusSent >= STATUS_SEND_INTERVAL);
+    bool heartbeatDue = (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL);
 
     if (!modeChanged && !heartbeatDue) return;
     if (!WiFi.isConnected()) return;
@@ -431,10 +430,7 @@ void periodicStatusReport() {
 
     if (sendToServer(json)) {
         lastStepperMode = sensorData.stepperMode;
-        lastStatusSent = millis();
-#ifdef DEBUG_PRINT
-        Serial.printf("[SEND] %s\n", json);
-#endif
+        lastHeartbeat = millis();
     } else {
         Serial.printf("[SEND] FAIL %s\n", json);
     }
@@ -469,7 +465,7 @@ void setup() {
     if (!cfg.useUDP) tcpClient.setNoDelay(true);
 
     lastWiFiCheck  = millis();
-    lastStatusSent = millis();
+    lastHeartbeat = millis();
 }
 
 // ================================================================

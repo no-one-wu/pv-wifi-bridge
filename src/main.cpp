@@ -258,13 +258,17 @@ bool sendToServer(const char *data) {
     size_t len = strlen(data);
     if (cfg.useUDP) {
         udpClient.beginPacket(cfg.serverIP, cfg.serverPort);
-        udpClient.print(data);
+        udpClient.write((const uint8_t*)data, len);
         ok = (udpClient.endPacket() == 1);
     } else {
         if (ensureServerConnected()) {
-            size_t sent = tcpClient.print(data);
-            ok = (sent == len);
-            if (!ok) tcpClient.stop();
+            size_t sent = tcpClient.write((const uint8_t*)data, len);
+            tcpClient.flush();                            // 强制推数据
+            ok = (sent == len) && tcpClient.connected();  // write成功且连接仍在
+            if (!ok) {
+                Serial.printf("[SEND] TCP fail, reconnecting...\n");
+                tcpClient.stop();
+            }
         }
     }
     stats.serverSent++;

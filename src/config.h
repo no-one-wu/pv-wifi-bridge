@@ -65,15 +65,23 @@ struct DeviceConfig {
     uint16_t serverPort;
     bool useUDP;
     uint8_t deviceID;     // 本机设备号 1-4，每个光伏设备一个 ESP-12F
+    bool     useStaticIP; // true=固定IP, false=DHCP
+    IPAddress localIP;    // 本机固定 IP
+    IPAddress gateway;    // 网关
+    IPAddress subnet;     // 子网掩码
 };
 
 const DeviceConfig DEFAULT_CONFIG = {
-    "401-iot",
-    "12345678",
-    IPAddress(192, 168, 1, 118),
-    9000,
-    false,
-    2
+    "1",
+    "11111111",
+    IPAddress(192, 168, 0, 255),
+    4399,
+    true,
+    2,
+    true,                                   // useStaticIP — 启用固定 IP
+    IPAddress(192, 168, 0, 51),             // localIP
+    IPAddress(192, 168, 0, 1),               // gateway
+    IPAddress(255, 255, 255, 0)              // subnet
 };
 
 // ========== 设备状态 ==========

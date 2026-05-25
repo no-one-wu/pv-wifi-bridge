@@ -172,6 +172,9 @@ void connectWiFi() {
     if (WiFi.isConnected()) return;
     Serial.printf("[WIFI] connecting to %s ...\n", cfg.ssid.c_str());
     WiFi.mode(WIFI_STA);
+    if (cfg.useStaticIP) {
+        WiFi.config(cfg.localIP, cfg.gateway, cfg.subnet);
+    }
     WiFi.begin(cfg.ssid.c_str(), cfg.password.c_str());
 }
 
@@ -421,32 +424,33 @@ void setup() {
     memset(&sensorData, 0, sizeof(sensorData));
 
     connectWiFi();
-    if (!cfg.useUDP) tcpClient.setNoDelay(true);
+    if (cfg.useUDP) udpClient.begin(4399);        // 固定本地端口，操控台回发用
+    else tcpClient.setNoDelay(true);
 
     lastWiFiCheck  = millis();
     lastHeartbeat = millis();
 }
 
 void loop() {
-    handleWatchdog();
+    handleWatchdog();               // 喂硬件看门狗，防止系统复位
 
-    processIncomingMCUData();
+    processIncomingMCUData();       // 读取 MCU 发来的二进制帧（0x11面板状态/0x14应答等）
 
     if (Serial.available()) {
         uint8_t firstByte = Serial.peek();
-        if (firstByte != WIFI_FRAME_SYNC) readSerialCommands();
+        if (firstByte != WIFI_FRAME_SYNC) readSerialCommands();  // 处理串口文本配置命令
     }
 
-    checkWiFi();
-    receiveFromServer();
-    processOutgoingCommands();
-    periodicStatusReport();
+    checkWiFi();                    // WiFi 断线检测与自动重连
+    receiveFromServer();            // 接收服务器指令（JSON + 二进制快速指令）
+    processOutgoingCommands();      // 将待发命令打包成二进制帧发给 MCU
+    periodicStatusReport();         // 状态变化或15秒心跳 → 上报服务器
 
     if (sensorData.online &&
         (millis() - sensorData.lastUpdate > STATUS_TIMEOUT_MS)) {
-        sensorData.online = false;
+        sensorData.online = false;   // MCU 10秒无数据，标记离线
         Serial.println("[WARN] MCU timeout (10s)");
     }
 
-    delay(10);
+    delay(10);                      // 让出 CPU 给 WiFi 协议栈处理网络包
 }

@@ -21,13 +21,6 @@ uint8_t pendingAction  = 0;
 int8_t  lastStepperMode = -1;
 
 // ================================================================
-//  setStatusLED — WiFi 状态指示灯
-// ================================================================
-void setStatusLED(bool connected) {
-    digitalWrite(STATUS_LED_PIN, connected ? LOW : HIGH);
-}
-
-// ================================================================
 //  buildStatusJSON — 构造上报服务器的设备状态 JSON
 // ================================================================
 void buildStatusJSON(char *buf, size_t len) {
@@ -43,6 +36,18 @@ void buildStatusJSON(char *buf, size_t len) {
 void parseServerCommand(const char *json) {
     uint8_t dev = 0;
     uint8_t act = 0;
+
+    // 报警灯: {"t":"alarm","id":1}
+    if (strstr(json, "\"alarm\"")) {
+        const char *idPos = strstr(json, "\"id\":");
+        if (!idPos) return;
+        dev = (uint8_t)atoi(idPos + 5);
+        if (dev < 1 || dev > 4 || dev != cfg.deviceID) return;
+        pendingAction = ACT_ALARM;
+        pendingCommand = true;
+        Serial.printf("[CMD] alarm -> dev=%u\n", dev);
+        return;
+    }
 
     if (strstr(json, "\"set_panel\"")) {
         const char *idPos = strstr(json, "\"id\":");
@@ -85,7 +90,7 @@ static void parseBinaryCommand(const uint8_t *data, uint16_t len) {
     }
 
     if (dev < 1 || dev > 4 || dev != cfg.deviceID) return;
-    if (mode != ACT_CLEAN && mode != ACT_RESET) return;
+    if (mode != ACT_CLEAN && mode != ACT_RESET && mode != ACT_ALARM) return;
 
     pendingAction = mode;
     pendingCommand = true;
@@ -190,11 +195,12 @@ void checkWiFi() {
                 WiFi.localIP().toString().c_str(), WiFi.RSSI());
             wasConnected = true;
         }
-        setStatusLED(true);
+        digitalWrite(STATUS_LED_PIN, LOW);   // WiFi 已连 → LED 亮
         return;
     }
 
-    setStatusLED(false);
+    digitalWrite(STATUS_LED_PIN, HIGH);      // WiFi 断 → LED 灭
+
     wl_status_t status = WiFi.status();
     const char* names[] = {
         "IDLE","NO_SSID_AVAIL","SCAN_COMPLETED",
@@ -363,19 +369,23 @@ void processIncomingMCUData() {
 // ================================================================
 //  processOutgoingCommands — 将待发命令打包成二进制帧发给 MCU
 // ================================================================
-// 构造纯二进制 payload: [panel_id 1B] [mode 1B]
 void processOutgoingCommands() {
     if (!pendingCommand) return;
 
-    uint8_t payload[2];
-    payload[0] = (uint8_t)cfg.deviceID;
-    payload[1] = pendingAction;   // ACT_CLEAN=1 / ACT_RESET=2
-
-    sendFrameToMCU(WIFI_TYPE_SET_PANEL, payload, 2);
-    stats.framesSent++;
-#ifdef DEBUG_PRINT
-    Serial.printf("[TXMCU] SET_PANEL id=%u mode=%u\n", payload[0], payload[1]);
-#endif
+    if (pendingAction == ACT_ALARM) {
+        // 报警灯: 空 payload, 帧类型 0x25
+        sendFrameToMCU(WIFI_TYPE_ALARM, NULL, 0);
+        stats.framesSent++;
+        Serial.printf("[TXMCU] ALARM\n");
+    } else {
+        // 面板控制: [panel_id 1B] [mode 1B]
+        uint8_t payload[2];
+        payload[0] = (uint8_t)cfg.deviceID;
+        payload[1] = pendingAction;
+        sendFrameToMCU(WIFI_TYPE_SET_PANEL, payload, 2);
+        stats.framesSent++;
+        Serial.printf("[TXMCU] SET_PANEL id=%u mode=%u\n", payload[0], payload[1]);
+    }
     pendingCommand = false;
 }
 
@@ -387,7 +397,10 @@ void periodicStatusReport() {
     bool heartbeatDue = (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL);
 
     if (!modeChanged && !heartbeatDue) return;
-    if (!WiFi.isConnected()) return;
+
+    // 与 checkWiFi 一致: isConnected 或 有IP 都视为能发
+    bool canSend = WiFi.isConnected() || WiFi.localIP().isSet();
+    if (!canSend) return;
 
     char json[256];
     buildStatusJSON(json, sizeof(json));
@@ -410,11 +423,10 @@ void handleWatchdog() { ESP.wdtFeed(); }
 // ================================================================
 void setup() {
     pinMode(STATUS_LED_PIN, OUTPUT);
-    setStatusLED(false);
+    digitalWrite(STATUS_LED_PIN, HIGH);      // 先灭，连上 WiFi 再亮
 
     Serial.begin(SERIAL_BAUD);
-    while (!Serial) ;
-    Serial.setTimeout(10);
+    delay(100);
 
     Serial.println("\n[BOOT] ESP-12F PV WiFi Bridge v2.0");
     Serial.printf("[BOOT] dev=%u server=%s:%u %s\n",

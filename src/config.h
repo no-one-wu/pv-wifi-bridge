@@ -26,6 +26,7 @@
 #define WIFI_TYPE_TASK_SWITCH   0x22  // payload: task_id(1B)
 #define WIFI_TYPE_CMD_INDEX     0x23  // payload: index(1B)
 #define WIFI_TYPE_SHUTDOWN      0x24  // payload: 空
+#define WIFI_TYPE_ALARM         0x25  // payload: 空, PA.0高电平2秒后自动低
 
 // 上行: MCU → ESP
 #define WIFI_TYPE_PANEL_STATUS  0x11  // payload: 4×(state 1B + ts 4B LE) = 20B
@@ -46,6 +47,7 @@
 #define ACT_CLEAN  1
 #define ACT_RESET  2
 #define ACT_STOP   0
+#define ACT_ALARM  3
 
 // ========== 服务器→ESP 二进制快速指令 ==========
 // 5 字节: [0xAB] [dev_id] [mode] [0xCD] [checksum]

@@ -25,7 +25,7 @@ import queue
 from datetime import datetime
 
 # ========== 默认配置 ==========
-DEFAULT_PORT = 9000
+DEFAULT_PORT = 4399
 RECV_BUFFER  = 4096
 
 # ========== 颜色输出（Windows 兼容） ==========
@@ -52,6 +52,7 @@ CMD_TEMPLATES = {
     'clean': '{"t":"set_panel","id":{dev},"mode":1}',
     'reset': '{"t":"set_panel","id":{dev},"mode":2}',
     'stop':  '{"t":"set_panel","id":{dev},"mode":0}',
+    'alarm': '{"t":"alarm","id":{dev}}',
 }
 
 # 二进制格式（默认，5字节低延迟）: [0xAB] [dev_id] [mode] [0xCD] [checksum]
@@ -64,6 +65,7 @@ BIN_CMDS = {
     'clean': lambda d: bin_cmd(d, 1),
     'reset': lambda d: bin_cmd(d, 2),
     'stop':  lambda d: bin_cmd(d, 0),
+    'alarm': lambda d: bin_cmd(d, 3),
 }
 
 USE_BINARY = True  # True=二进制快速指令(默认), False=JSON
@@ -72,6 +74,7 @@ USE_BINARY = True  # True=二进制快速指令(默认), False=JSON
 def print_help():
     print(f"""
 {Color.BOLD}可用命令:{Color.RESET}
+  {Color.GREEN}alarm <dev>{Color.RESET}    — 向设备 <dev> 发送报警灯指令（高电平2秒）
   {Color.GREEN}clean <dev>{Color.RESET}     — 向设备 <dev> 发送除尘命令（如 clean 1）
   {Color.GREEN}reset <dev>{Color.RESET}     — 向设备 <dev> 发送复位命令（如 reset 2）
   {Color.GREEN}stop <dev>{Color.RESET}      — 向设备 <dev> 发送停止命令
@@ -86,6 +89,7 @@ def print_help():
   {Color.GREEN}1c / 2c / 3c / 4c{Color.RESET}  — 对设备 1~4 发送除尘命令
   {Color.GREEN}1r / 2r / 3r / 4r{Color.RESET}  — 对设备 1~4 发送复位命令
   {Color.GREEN}1s / 2s / 3s / 4s{Color.RESET}  — 对设备 1~4 发送停止命令
+  {Color.GREEN}1a / 2a / 3a / 4a{Color.RESET}  — 对设备 1~4 发送报警灯命令
 """)
 
 # ========== 显示设备状态 ==========
@@ -116,10 +120,12 @@ def print_list():
 
 # ========== 解析收到的 JSON ==========
 def handle_received(data_str, addr=None):
+    # 过滤绕回来的二进制指令回声（非 JSON 不打印）
+    if data_str and data_str[0] != '{':
+        return
     try:
         data = json.loads(data_str.strip())
     except json.JSONDecodeError:
-        print(f"{Color.RED}[收到非 JSON 数据]{Color.RESET} {addr or ''}: {data_str.strip()}")
         return
 
     dev_id = data.get('dev', '?')
@@ -246,17 +252,22 @@ class UDPServer:
         self.host = host
         self.port = port
         self.sock = None
-        self.last_client = None  # 记住最后一个发来数据的客户端地址
+        self.last_client = None
+        self.running = False
 
     def start(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)  # 允许收发广播
         self.sock.bind((self.host, self.port))
         self.sock.setblocking(False)
+        self.running = True
         print(f"{Color.GREEN}[UDP 服务端启动]{Color.RESET} 监听 {self.host}:{self.port}")
-        print(f"  等待 ESP-12F 设备数据...\n")
+        print(f"  等待 ESP-12F 设备数据...")
+        print(f"  提示: 如收不到数据请检查 Windows 防火墙是否放行 UDP {self.port}\n")
 
     def stop(self):
+        self.running = False
         if self.sock:
             try:
                 self.sock.close()
@@ -265,15 +276,13 @@ class UDPServer:
         print(f"{Color.YELLOW}[UDP 服务端已关闭]{Color.RESET}")
 
     def send_to_all(self, data):
-        """向最近通信的客户端发送数据"""
-        if not self.last_client:
-            print(f"{Color.YELLOW}[UDP] 无目标客户端（尚未收到任何设备数据）{Color.RESET}")
-            return
+        """UDP 子网广播发送"""
         try:
+            dest = ('192.168.0.255', self.port)
             if isinstance(data, bytes):
-                self.sock.sendto(data, self.last_client)
+                self.sock.sendto(data, dest)
             else:
-                self.sock.sendto((data + '\n').encode('utf-8'), self.last_client)
+                self.sock.sendto((data + '\n').encode('utf-8'), dest)
         except Exception as e:
             print(f"{Color.RED}[UDP 发送失败]{Color.RESET} {e}")
 
@@ -287,6 +296,7 @@ class UDPServer:
         try:
             raw, addr = self.sock.recvfrom(RECV_BUFFER)
             self.last_client = addr
+            print(f"[UDP RAW] {len(raw)} bytes from {addr[0]}:{addr[1]}: {raw[:200]}")  # 诊断打印
             for line in raw.decode('utf-8', errors='replace').split('\n'):
                 line = line.strip()
                 if line:
@@ -308,7 +318,7 @@ def handle_shortcut(cmd, server):
     if dev < 1 or dev > 4:
         return False
 
-    action_map = {'c': ('clean', '除尘'), 'r': ('reset', '复位'), 's': ('stop', '停止')}
+    action_map = {'c': ('clean', '除尘'), 'r': ('reset', '复位'), 's': ('stop', '停止'), 'a': ('alarm', '报警灯')}
     if cmd[1] not in action_map:
         return False
 
@@ -371,7 +381,7 @@ def process_user_command(cmd, server):
     elif action == 'clear':
         print('\n' * 50)
 
-    elif action in ('clean', 'reset', 'stop'):
+    elif action in ('clean', 'reset', 'stop', 'alarm'):
         dev = parts[1] if len(parts) > 1 else None
         if not dev:
             print(f"  {Color.RED}用法: {action} <设备号 1-4>{Color.RESET}")
@@ -383,7 +393,7 @@ def process_user_command(cmd, server):
         except ValueError:
             print(f"  {Color.RED}设备号需为 1~4{Color.RESET}")
             return
-        act_names = {'clean': '除尘', 'reset': '复位', 'stop': '停止'}
+        act_names = {'clean': '除尘', 'reset': '复位', 'stop': '停止', 'alarm': '报警灯'}
         if USE_BINARY:
             data = BIN_CMDS[action](dev)
             print(f"  发送BIN → {act_names[action]}命令 to 设备#{dev}  {data.hex()}")

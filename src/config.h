@@ -79,9 +79,9 @@ const DeviceConfig DEFAULT_CONFIG = {
     IPAddress(192, 168, 0, 255),
     4399,
     true,
-    2,
+    1,
     true,                                   // useStaticIP — 启用固定 IP
-    IPAddress(192, 168, 0, 51),             // localIP
+    IPAddress(192, 168, 0, 50),             // localIP
     IPAddress(192, 168, 0, 1),               // gateway
     IPAddress(255, 255, 255, 0)              // subnet
 };
